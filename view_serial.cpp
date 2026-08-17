@@ -3,16 +3,24 @@
 #include "view_serial.h"
 #include "config.h"
 
-// Pro sériovku má zabezpečení jméno, ne jeden znak — místa je tady dost.
+// Pro sériovku má zabezpečení celé jméno, ne dvouznakovou značku — místa je
+// tady dost. Nejdelší je "WPA2/WPA3", tedy 9 znaků, a podle toho je nastavená
+// šířka sloupce ve formátu níž. Když sem přidáš delší jméno, musí se zvednout
+// i ta šířka, jinak se rozjede sloupec s BSSID.
 static const char* authName(AuthKind a) {
   switch (a) {
-    case AUTH_OPEN:       return "open";
-    case AUTH_WEP:        return "WEP";
-    case AUTH_WPA:        return "WPA";
-    case AUTH_WPA2:       return "WPA2";
-    case AUTH_WPA3:       return "WPA3";
-    case AUTH_ENTERPRISE: return "ENT";
-    default:              return "?";
+    case AUTH_OPEN:      return "open";
+    case AUTH_OWE:       return "OWE";
+    case AUTH_WEP:       return "WEP";
+    case AUTH_WPA:       return "WPA";
+    case AUTH_WPA2:      return "WPA2";
+    case AUTH_WPA3:      return "WPA3";
+    case AUTH_WPA_WPA2:  return "WPA/WPA2";
+    case AUTH_WPA2_WPA3: return "WPA2/WPA3";
+    case AUTH_ENT_WPA:   return "WPA-ENT";
+    case AUTH_ENT_WPA2:  return "WPA2-ENT";
+    case AUTH_ENT_WPA3:  return "WPA3-ENT";
+    default:             return "?";
   }
 }
 
@@ -46,9 +54,9 @@ void serialDump(const NetList& nets, uint32_t collectMs) {
                   (unsigned)nets.count(),
                   (unsigned long)collectMs);
   }
-  Serial.println(F(" #  ch  dBm  auth   bssid              ssid"));
+  Serial.println(F(" #  ch  dBm  auth       bssid              ssid"));
 
-  // Rozpočet na řádek: 2+2 + 2+1 + 4+2 + 5+2 + 17+2 + 32 = 71 znaků + NUL.
+  // Rozpočet na řádek: 2+2 + 2+1 + 4+2 + 9+2 + 17+2 + 32 = 75 znaků + NUL.
   // 110 je s rezervou a leží to na stacku loop tasku, který má 8 kB.
   char line[110];
 
@@ -57,7 +65,7 @@ void serialDump(const NetList& nets, uint32_t collectMs) {
     const char* ssid = n.ssid[0] ? n.ssid : "<hidden>";
 
     snprintf(line, sizeof(line),
-             "%2u  %2u %4d  %-5s  %02X:%02X:%02X:%02X:%02X:%02X  %s",
+             "%2u  %2u %4d  %-9s  %02X:%02X:%02X:%02X:%02X:%02X  %s",
              (unsigned)(i + 1),
              (unsigned)n.channel,
              (int)n.rssi,

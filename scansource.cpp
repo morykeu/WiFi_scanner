@@ -7,17 +7,53 @@
 //
 // Tohle je jediné místo v projektu, kde se objeví wifi_auth_mode_t. Díky tomu
 // nemusí view_oled.cpp ani view_serial.cpp includovat WiFi.h.
+// Ověřeno proti core 3.3.11, konkrétně proti
+//   tools/esp32-libs/3.3.11/include/esp_wifi/include/esp_wifi_types_generic.h
+// řádky 87–104. Všechny konstanty použité níž tam existují, takže tady nejsou
+// žádné #if guardy — projekt cílí na core 3.x a je to napsané v README.
 static AuthKind toAuthKind(wifi_auth_mode_t m) {
   switch (m) {
-    case WIFI_AUTH_OPEN:            return AUTH_OPEN;
-    case WIFI_AUTH_WEP:             return AUTH_WEP;
-    case WIFI_AUTH_WPA_PSK:         return AUTH_WPA;
-    case WIFI_AUTH_WPA2_PSK:        return AUTH_WPA2;
-    case WIFI_AUTH_WPA_WPA2_PSK:    return AUTH_WPA2;  // smíšený režim
-    case WIFI_AUTH_WPA2_ENTERPRISE: return AUTH_ENTERPRISE;
-    case WIFI_AUTH_WPA3_PSK:        return AUTH_WPA3;
-    case WIFI_AUTH_WPA2_WPA3_PSK:   return AUTH_WPA3;  // smíšený režim
-    default:                        return AUTH_OTHER;
+    case WIFI_AUTH_OPEN:  return AUTH_OPEN;
+    case WIFI_AUTH_OWE:   return AUTH_OWE;
+    case WIFI_AUTH_WEP:   return AUTH_WEP;
+
+    // Čisté režimy — síť přijímá právě jednu generaci.
+    case WIFI_AUTH_WPA_PSK:  return AUTH_WPA;
+    case WIFI_AUTH_WPA2_PSK: return AUTH_WPA2;
+    case WIFI_AUTH_WPA3_PSK: return AUTH_WPA3;
+
+    // Smíšené režimy. Nesmí splynout s tou silnější generací — viz komentář
+    // u AuthKind v netlist.h.
+    case WIFI_AUTH_WPA_WPA2_PSK:  return AUTH_WPA_WPA2;
+    case WIFI_AUTH_WPA2_WPA3_PSK: return AUTH_WPA2_WPA3;
+
+    // WPA3_EXT_PSK a WPA3_EXT_PSK_MIXED_MODE jsou obě podle hlavičky
+    // deprecated a obě "yield same result as WIFI_AUTH_WPA3_PSK". U toho
+    // druhého jméno svádí zařadit ho mezi smíšené, ale to by byl dohad ze
+    // jména proti doloženému tvrzení v dokumentaci, takže se držíme hlavičky.
+    // Kdyby se ukázalo, že se ta věta týká jen konfigurace AP a ne toho, co
+    // hlásí sken, patří MIXED_MODE k AUTH_WPA2_WPA3.
+    case WIFI_AUTH_WPA3_EXT_PSK:            return AUTH_WPA3;
+    case WIFI_AUTH_WPA3_EXT_PSK_MIXED_MODE: return AUTH_WPA3;
+
+    // Enterprise (802.1X). Generace se rozlišuje, protože rozdíl mezi
+    // WPA-Enterprise a WPA3-Enterprise je stejně podstatný jako u PSK.
+    case WIFI_AUTH_WPA_ENTERPRISE: return AUTH_ENT_WPA;
+
+    // Pozor: WIFI_AUTH_WPA2_ENTERPRISE je v hlavičce definované jako alias
+    // (= WIFI_AUTH_ENTERPRISE), tedy stejná hodnota. Uvést obě jména jako
+    // dva case by byl duplicitní case a překlad by spadl.
+    case WIFI_AUTH_ENTERPRISE: return AUTH_ENT_WPA2;
+
+    // "WPA3-Enterprise Transition Mode" — přijímá i WPA2-Enterprise, takže
+    // se podle stejného pravidla hlásí jako ta slabší generace.
+    case WIFI_AUTH_WPA2_WPA3_ENTERPRISE: return AUTH_ENT_WPA2;
+
+    case WIFI_AUTH_WPA3_ENTERPRISE: return AUTH_ENT_WPA3;
+    case WIFI_AUTH_WPA3_ENT_192:    return AUTH_ENT_WPA3;
+
+    // WAPI_PSK, DPP a cokoliv, co do enumu přibude po 3.3.11.
+    default: return AUTH_OTHER;
   }
 }
 

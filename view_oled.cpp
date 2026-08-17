@@ -19,11 +19,11 @@ static U8G2_SH1106_128X64_NONAME_F_4W_HW_SPI u8g2(U8G2_R0, 5, 16, 17);
 //
 //   y=8    WiFi 24 AP *          2/5
 //   y=10   ────────────────────────────
-//   y=21  2 Nazev-site-d~     6  -41
-//   y=31  - FreeWifi          1  -58
-//   y=41  3 <hidden>         11  -67
-//   y=51  2 UPC1234567        6  -72
-//   y=61  w StaraSitVeSk~     3 -100     ← poslední řádek končí na y=63
+//   y=21  12 Nazev-site~      6  -41
+//   y=31   - FreeWifi         1  -58
+//   y=41   3 <hidden>        11  -67
+//   y=51  23 UPC12345678      6  -72
+//   y=61   w StaraSitVeS~     3 -100     ← poslední řádek končí na y=63
 //
 // Účaří (baseline) je y, na kterém stojí písmena. Font 6x10 má ascent 7 a
 // descent 2, takže řádek zabírá y-7 až y+2. Poslední řádek: 54..63, přesně
@@ -33,24 +33,50 @@ static const uint8_t HDR_BASE  = 8;
 static const uint8_t SEP_Y     = 10;
 static const uint8_t ROW0_BASE = 21;
 static const uint8_t ROW_PITCH = 10;
-static const uint8_t AUTH_W    = 6;   // sloupec se znakem zabezpečení = 1 znak
+static const uint8_t AUTH_W    = 12;  // sloupec se zabezpečením = 2 znaky
 static const uint8_t GAP_W     = 2;   // mezera mezi SSID a číselným blokem
+// Rozpočet řádku: 12 (auth) + 72 (SSID) + 2 (mezera) + 42 (čísla) = 128 px.
+// Na SSID tedy zbývá 12 znaků. Dvouznakový sloupec stojí proti jednoznakovému
+// právě jeden znak SSID a je to vědomá výměna — viz authText().
 
 // Pozor na diakritiku: font u8g2_font_6x10_tf pokrývá ASCII a Latin-1, ale
 // ě š č ř ž ů jsou v Latin-2. Kdybys do drawStr() dal české "žádné", vykreslí
 // se prázdná místa. Proto jsou všechny texty na displeji bez háčků.
 
-// Jeden znak zabezpečení. Sloupec vlevo se dá přečíst jedním pohledem shora
-// dolů, což na konci řádku nejde.
-static char authChar(AuthKind a) {
+// Dva znaky zabezpečení, sloupec úplně vlevo — ten se dá přečíst jedním
+// pohledem shora dolů, což na konci řádku nejde.
+//
+//   -   otevřená            1   jen WPA      12  smíšená, přijímá i WPA
+//   o   OWE / Enhanced Open 2   jen WPA2     23  smíšená, přijímá i WPA2
+//   w   WEP                 3   jen WPA3     ?   nerozpoznáno
+//   e1  Enterprise na WPA   e2  Ent. WPA2    e3  Ent. WPA3 včetně 192bit
+//
+// Proč dva znaky a ne jeden: dvě číslice vedle sebe se čtou jako "přijímá
+// obojí" bez legendy, a to je u nástroje, na který se člověk dívá pět vteřin,
+// důležitější než ušetřený znak SSID. Zároveň to řeší Enterprise — e1/e2/e3
+// neschovává rozdíl mezi WPA-Enterprise a WPA3-Enterprise a nemusí se kvůli
+// tomu podhodnocovat WPA3 Suite-B. A rozšiřuje se to samo: další smíšený
+// režim se zapíše stejným pravidlem bez vymýšlení nového písmene.
+//
+// Jednoznakové hodnoty jsou zarovnané doprava mezerou, aby ve sloupci stály
+// pod druhou číslicí těch dvouznakových.
+//
+// Návratová hodnota ukazuje na literál, takže se nikam nekopíruje a nemá
+// životnost, kterou by bylo potřeba hlídat.
+static const char* authText(AuthKind a) {
   switch (a) {
-    case AUTH_OPEN:       return '-';
-    case AUTH_WEP:        return 'w';
-    case AUTH_WPA:        return '1';
-    case AUTH_WPA2:       return '2';
-    case AUTH_WPA3:       return '3';
-    case AUTH_ENTERPRISE: return 'e';
-    default:              return '?';
+    case AUTH_OPEN:      return " -";
+    case AUTH_OWE:       return " o";
+    case AUTH_WEP:       return " w";
+    case AUTH_WPA:       return " 1";
+    case AUTH_WPA2:      return " 2";
+    case AUTH_WPA3:      return " 3";
+    case AUTH_WPA_WPA2:  return "12";
+    case AUTH_WPA2_WPA3: return "23";
+    case AUTH_ENT_WPA:   return "e1";
+    case AUTH_ENT_WPA2:  return "e2";
+    case AUTH_ENT_WPA3:  return "e3";
+    default:             return " ?";
   }
 }
 
@@ -109,11 +135,10 @@ static void drawRow(uint8_t base, const NetInfo& n) {
   const int rightW = (int)u8g2.getStrWidth(right);
   u8g2.drawStr(SCR_W - rightW, base, right);
 
-  const char a[2] = { authChar(n.auth), '\0' };
-  u8g2.drawStr(0, base, a);
+  u8g2.drawStr(0, base, authText(n.auth));
 
-  // Kolik pixelů na SSID vlastně zbylo. Počítá se, ne hádá — proto se dá
-  // formát číselného bloku změnit a layout drží sám.
+  // Kolik pixelů na SSID vlastně zbylo. Počítá se, ne hádá — proto stačilo
+  // u dvouznakového sloupce zvednout AUTH_W a layout se přepočítal sám.
   const int avail = (int)SCR_W - (int)AUTH_W - (int)GAP_W - rightW;
 
   char ssid[34];

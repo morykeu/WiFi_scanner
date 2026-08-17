@@ -14,14 +14,24 @@
 // sériový výpis musely includovat WiFi.h, tedy by závisely na zdroji dat.
 // Takhle to ScanSource přeloží jednou u sebe a v promiskuitním režimu to
 // příště odvodíš z capability bitů beaconu do stejného cíle.
+// Řídící pravidlo: u průzkumu zabezpečení se hlásí NEJSLABŠÍ metoda, kterou
+// síť přijímá. Síť ve smíšeném režimu WPA/WPA2 pořád obsluhuje i WPA klienty
+// a útočník si vybere tu slabší cestu — to, že umí i WPA2, mu nepřekáží.
+// Kdyby se taková síť hlásila jako WPA2, nástroj by tvrdil líp, než jak to je.
+// Proto mají smíšené režimy vlastní hodnoty a nesplývají s čistými.
 enum AuthKind : uint8_t {
   AUTH_OPEN = 0,   // bez šifrování
+  AUTH_OWE,        // Enhanced Open — šifrované, ale bez hesla a bez ověření
   AUTH_WEP,
-  AUTH_WPA,
-  AUTH_WPA2,
-  AUTH_WPA3,
-  AUTH_ENTERPRISE, // 802.1X (WPA/WPA2/WPA3-Enterprise)
-  AUTH_OTHER       // WAPI, OWE, cokoliv, co neumíme pojmenovat
+  AUTH_WPA,        // jen WPA
+  AUTH_WPA2,       // jen WPA2
+  AUTH_WPA3,       // jen WPA3
+  AUTH_WPA_WPA2,   // smíšený, přijímá i WPA
+  AUTH_WPA2_WPA3,  // smíšený, přijímá i WPA2
+  AUTH_ENT_WPA,    // 802.1X na generaci WPA
+  AUTH_ENT_WPA2,   // 802.1X na generaci WPA2
+  AUTH_ENT_WPA3,   // 802.1X na generaci WPA3, včetně Suite-B 192bit
+  AUTH_OTHER       // WAPI, DPP, cokoliv, co neumíme pojmenovat
 };
 
 struct NetInfo {

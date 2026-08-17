@@ -2,7 +2,7 @@
 
 A standalone WiFi survey tool for the ESP32. It scans the 2.4 GHz band on a
 timer and shows what it finds on a 128×64 OLED: SSID, channel, signal strength
-in dBm, and a one-character encryption marker, sorted strongest-first. Because
+in dBm, and a two-character encryption marker, sorted strongest-first. Because
 five rows do not fit twenty-four networks, the list is paginated and the pages
 advance on their own every three seconds, with the header showing the total
 count and the current page. The same data goes out over the serial port in a
@@ -18,18 +18,21 @@ What the display looks like, with the layout constants that produce it:
 ```
  y=8    WiFi 24/37 AP *        2/5
  y=10   ────────────────────────────
- y=21  2 Nazev-site-d~     6  -41
- y=31  - FreeWifi          1  -58
- y=41  3 <hidden>         11  -67
- y=51  2 UPC1234567        6  -72
- y=61  w StaraSitVeSk~     3 -100
+ y=21  12 Nazev-site~      6  -41
+ y=31   - FreeWifi         1  -58
+ y=41   3 <hidden>        11  -67
+ y=51  23 UPC12345678      6  -72
+ y=61   w StaraSitVeS~     3 -100
 ```
 
-The leading character is the encryption type: `-` open, `w` WEP, `1` WPA,
-`2` WPA2, `3` WPA3, `e` Enterprise, `?` unrecognised. `24/37` means twenty-four
-networks are stored out of thirty-seven actually seen — see
-[Showing what was dropped](#showing-what-was-dropped). The `*` means a scan is
-in progress right now.
+The leading two characters are the encryption mode, reported by the **weakest
+method the network accepts** — `12` means WPA/WPA2 mixed, which still serves WPA
+clients. The full legend and the reasoning are in
+[Reporting the weakest accepted method](#reporting-the-weakest-accepted-method).
+
+`24/37` means twenty-four networks are stored out of thirty-seven actually seen;
+see [Showing what was dropped](#showing-what-was-dropped). The `*` means a scan
+is in progress right now.
 
 ## Hardware
 
@@ -63,7 +66,11 @@ of that file, commented out.
    https://espressif.github.io/arduino-esp32/package_esp32_index.json
    ```
 3. **Tools → Board → Boards Manager**, search `esp32`, install
-   *esp32 by Espressif Systems*.
+   *esp32 by Espressif Systems*. **This project targets the 3.x series** and was
+   developed against **3.3.11**. It maps `WIFI_AUTH_OWE` and
+   `WIFI_AUTH_WPA3_ENT_192`, which do not exist in core 2.x, so it will not
+   compile there. There are no `#if` version guards: a stated target version is
+   easier to trust than conditional compilation guessing at a threshold.
 4. **Tools → Board → ESP32 Arduino → ESP32 Dev Module**.
 5. **Tools → Manage Libraries**, search `U8g2`, install *U8g2 by oliver*.
 6. Open [`WiFi_scanner.ino`](WiFi_scanner.ino). The other files appear as tabs
@@ -110,6 +117,54 @@ appears.
 Code comments are in Czech; identifiers and this README are in English.
 
 ## Decisions worth explaining
+
+### Reporting the weakest accepted method
+
+A network in WPA/WPA2 mixed mode still serves WPA clients. An attacker takes the
+weaker path, and the fact that the AP also speaks WPA2 does not get in their way.
+Reporting that network as `WPA2` would describe its security as better than it
+is — for a survey tool, that is the one direction of error that matters. So every
+network is reported by **the weakest method it accepts**, and mixed modes get
+their own markers instead of collapsing into the stronger generation.
+
+| Marker | Meaning |
+|---|---|
+| `-`  | open, no encryption |
+| `o`  | OWE / Enhanced Open — encrypted, but no password and no authentication |
+| `w`  | WEP |
+| `1`  | WPA only |
+| `2`  | WPA2 only |
+| `3`  | WPA3 only |
+| `12` | mixed — accepts WPA as well as WPA2 |
+| `23` | mixed — accepts WPA2 as well as WPA3 |
+| `e1` | Enterprise (802.1X) at the WPA generation |
+| `e2` | Enterprise at the WPA2 generation |
+| `e3` | Enterprise at the WPA3 generation, including Suite-B 192-bit |
+| `?`  | unrecognised (WAPI, DPP, anything added after core 3.3.11) |
+
+The column is two characters wide, and that is a deliberate trade. Two digits
+side by side read as "accepts both" without consulting a legend, which for a tool
+someone glances at for five seconds is worth more than the one SSID character it
+costs — the name column goes from 13 to 12 characters. The same scheme also
+covers Enterprise: `e1`/`e2`/`e3` keeps the difference between WPA-Enterprise and
+WPA3-Enterprise visible where a single `e` would have hidden it, and it means
+WPA3-Enterprise Suite-B 192-bit does not have to be under-reported just to fit.
+WPA3-Enterprise Transition Mode reports as `e2`, because WPA2-Enterprise is the
+weakest generation it accepts. And the scheme extends itself: another mixed mode
+would be written by the same rule, with no new letter to invent.
+
+One mode is deliberately *not* treated as mixed. `WIFI_AUTH_WPA3_EXT_PSK_MIXED_MODE`
+reports as `3`, because the ESP-IDF header states it yields the same result as
+`WIFI_AUTH_WPA3_PSK`. The identifier suggests otherwise, but a documented
+statement outranks an inference drawn from a name; the doubt is recorded in a
+comment at the mapping site rather than acted on.
+
+The mapping was written against
+`esp_wifi_types_generic.h` from core 3.3.11, which defines seventeen auth modes —
+including several the obvious implementation misses, such as `WPA_ENTERPRISE` and
+the transition modes. Note also that `WIFI_AUTH_WPA2_ENTERPRISE` is an alias for
+`WIFI_AUTH_ENTERPRISE` in that header, so only one of the two names can appear as
+a `case` label.
 
 ### Asynchronous scan instead of a blocking one
 
@@ -209,9 +264,16 @@ between what a program observed and what it retained is worth two bytes of RAM.
 - **No diacritics.** `u8g2_font_6x10_tf` covers ASCII and Latin-1; `ě š č ř ž ů`
   are in Latin-2 and render as blanks. All on-screen strings are plain ASCII for
   that reason.
-- **Long SSIDs are cut off.** 128 px at 6 px per character leaves 13 characters
-  for the SSID once the channel and dBm columns are accounted for. Truncated
-  names end in `~`. The serial output has the full name.
+- **Long SSIDs are cut off.** 128 px at 6 px per character leaves 12 characters
+  for the SSID once the encryption, channel and dBm columns are accounted for.
+  Truncated names end in `~`. The serial output has the full name.
+- **Not every encryption mode has been seen in the field.** The mapping table
+  comes from the ESP-IDF header, and modes that need uncommon hardware to
+  produce — OWE (Enhanced Open), WPA3-Enterprise 192-bit, WPA-Enterprise, WEP —
+  have not been observed against a live network, so their on-screen output is
+  derived rather than confirmed. The mixed-mode markers `12` and `23`, which are
+  the point of the whole scheme, are the ones worth checking against a router's
+  own admin page if you want to trust them.
 - **2.4 GHz only.** The ESP32-WROOM-32D has no 5 GHz radio, so 5 GHz networks
   are invisible to this tool regardless of software.
 - **Promiscuous mode and `scanNetworks()` cannot run simultaneously.** The radio
