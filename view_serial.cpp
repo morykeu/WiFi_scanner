@@ -34,26 +34,35 @@ void serialBegin() {
   Serial.println(F("=== ESP32 WiFi scanner ==="));
 }
 
-void serialDump(const NetList& nets, uint32_t collectMs) {
+void serialDump(const NetList& nets, uint32_t collectMs, const char* note) {
   static uint32_t scanNo = 0;
   scanNo++;
 
   // Když se něco nevešlo, musí to být vidět i tady, ne jen na displeji.
   // Jinak by ladicí výpis vypadal jako úplný seznam a nebyl by.
   if (nets.truncated()) {
-    Serial.printf("\n--- sken #%lu: %u z %u siti, %u zahozeno (MAX_NETS=%u), %lu ms ---\n",
+    Serial.printf("\n--- davka #%lu: %u z %u%s siti, %u zahozeno (MAX_NETS=%u), %lu ms ---\n",
                   (unsigned long)scanNo,
                   (unsigned)nets.count(),
                   (unsigned)nets.seen(),
+                  nets.seenIsLowerBound() ? "+" : "",
                   (unsigned)(nets.seen() - nets.count()),
                   (unsigned)MAX_NETS,
                   (unsigned long)collectMs);
   } else {
-    Serial.printf("\n--- sken #%lu: %u siti, %lu ms ---\n",
+    Serial.printf("\n--- davka #%lu: %u siti, %lu ms ---\n",
                   (unsigned long)scanNo,
                   (unsigned)nets.count(),
                   (unsigned long)collectMs);
   }
+
+  // Poznámka od zdroje — zahozené rámce, přeplněný roster. Když je prázdná,
+  // nevypisuje se vůbec, ať výpis nezaplevelí prázdný řádek.
+  if (note != nullptr && note[0] != '\0') {
+    Serial.print(F("    ! "));
+    Serial.println(note);
+  }
+
   Serial.println(F(" #  ch  dBm  auth       bssid              ssid"));
 
   // Rozpočet na řádek: 2+2 + 2+1 + 4+2 + 9+2 + 17+2 + 32 = 75 znaků + NUL.

@@ -19,11 +19,14 @@ static U8G2_SH1106_128X64_NONAME_F_4W_HW_SPI u8g2(U8G2_R0, 5, 16, 17);
 //
 //   y=8    WiFi 24 AP *          2/5
 //   y=10   ────────────────────────────
-//   y=21  12 Nazev-site~      6  -41
-//   y=31   - FreeWifi         1  -58
-//   y=41   3 <hidden>        11  -67
-//   y=51  23 UPC12345678      6  -72
-//   y=61   w StaraSitVeS~     3 -100     ← poslední řádek končí na y=63
+//   y=21  12 Nazev-sit~      6  -41
+//   y=31   - FreeWifi        1  -58
+//   y=41   3 <hidden>       11  -67
+//   y=51  23 UPC1234567       6  -72
+//   y=61   w StaraSitVe~      3 -100     ← poslední řádek končí na y=63
+//
+// Mezi sloupcem zabezpečení a jménem je celý znak mezery. Bez ní splývalo
+// "12" se začátkem SSID a řádek se dal přečíst úplně jinak, než co znamená.
 //
 // Účaří (baseline) je y, na kterém stojí písmena. Font 6x10 má ascent 7 a
 // descent 2, takže řádek zabírá y-7 až y+2. Poslední řádek: 54..63, přesně
@@ -33,11 +36,24 @@ static const uint8_t HDR_BASE  = 8;
 static const uint8_t SEP_Y     = 10;
 static const uint8_t ROW0_BASE = 21;
 static const uint8_t ROW_PITCH = 10;
-static const uint8_t AUTH_W    = 12;  // sloupec se zabezpečením = 2 znaky
-static const uint8_t GAP_W     = 2;   // mezera mezi SSID a číselným blokem
-// Rozpočet řádku: 12 (auth) + 72 (SSID) + 2 (mezera) + 42 (čísla) = 128 px.
-// Na SSID tedy zbývá 12 znaků. Dvouznakový sloupec stojí proti jednoznakovému
-// právě jeden znak SSID a je to vědomá výměna — viz authText().
+static const uint8_t AUTH_W          = 12;  // sloupec se zabezpečením = 2 znaky
+static const uint8_t GAP_AUTH_SSID_W = 6;   // mezera mezi zabezpečením a SSID
+static const uint8_t GAP_SSID_NUM_W  = 2;   // mezera mezi SSID a čísly
+// Dvě mezery mají vlastní jména schválně: pletly by se, a každá řeší něco
+// jiného. Ta první je čitelnost, ta druhá jen aby se text nedotýkal.
+//
+// Rozpočet řádku:
+//   12 (auth) + 6 (mezera) + 66 (SSID) + 2 (mezera) + 42 (čísla) = 128 px
+// Na SSID tedy zbývá 11 znaků.
+//
+// Proč je ta první mezera celý znak a ne dva pixely: bez ní se sloupec
+// zabezpečení slil se začátkem jména a "2O2 INTERNET" se čte jako "202
+// INTERNET", "12TP-LINK" jako jedno slovo. A protože avail bylo přesně
+// 72 px = 12 znaků, srazila by SSID na 11 znaků i mezera o dvou pixelech —
+// za tu samou cenu je tedy lepší mezera plná.
+//
+// Dvouznakový sloupec zabezpečení tak proti jednoznakovému stojí dohromady
+// dva znaky jména (13 → 11). Vědomá výměna, viz authText().
 
 // Pozor na diakritiku: font u8g2_font_6x10_tf pokrývá ASCII a Latin-1, ale
 // ě š č ř ž ů jsou v Latin-2. Kdybys do drawStr() dal české "žádné", vykreslí
@@ -99,22 +115,37 @@ static void fitToWidth(char* s, int maxW) {
   s[0] = '\0';
 }
 
-static void drawHeader(const NetList& nets, uint8_t page, uint8_t pages, bool scanning) {
+static void drawHeader(const NetList& nets, uint8_t page, uint8_t pages,
+                       const char* status) {
+  // Mezera před štítkem se přidá, jen když nějaký štítek je.
+  const char* sep = (status && status[0]) ? " " : "";
+  if (status == nullptr) status = "";
+
   // Když se všechny viděné sítě vešly, ukazuje se jedno číslo. Když se něco
   // zahodilo, ukazují se obě — "24/37 AP" čti jako "mám 24 z 37 viděných".
   // Hlavička, která by v tom druhém případě hlásila jen "24 AP", by tvrdila
   // něco, co není pravda, a nešlo by to z displeje nijak poznat.
-  char left[24];
+  //
+  // A "24/96+ AP" znamená "mám 24 z ASPOŇ 96" — druhé číslo je jen dolní
+  // odhad, protože i počítadlo zdroje narazilo na svůj strop. Bez toho
+  // plus by se ta samá vada jen posunula o patro výš a zase by mlčela.
+  char left[26];
   if (nets.truncated()) {
-    snprintf(left, sizeof(left), "WiFi %u/%u AP%s",
+    snprintf(left, sizeof(left), "WiFi %u/%u%s AP%s%s",
              (unsigned)nets.count(), (unsigned)nets.seen(),
-             scanning ? " *" : "");
+             nets.seenIsLowerBound() ? "+" : "",
+             sep, status);
   } else {
-    snprintf(left, sizeof(left), "WiFi %u AP%s",
-             (unsigned)nets.count(), scanning ? " *" : "");
+    snprintf(left, sizeof(left), "WiFi %u AP%s%s",
+             (unsigned)nets.count(), sep, status);
   }
-  // Nejdelší možná varianta je "WiFi 255/255 AP *", tedy 17 znaků = 102 px.
-  // Číslo stránky vpravo začíná nejdřív na x=110, takže se to nepotká.
+
+  // Nejdelší reálná varianta je "WiFi 24/96+ AP P13", tedy 18 znaků = 108 px.
+  // Číslo stránky vpravo je nejvýš "5/5" = 18 px, tedy začíná na x=110.
+  // Zbývají 2 px — těsné, ale nepřekrývá se.
+  //
+  // POZOR: kdyby MAX_NETS přesáhlo 99 nebo PROMISC_ROSTER_CAP taky, přibude
+  // číslice, hlavička naroste na 114 px a začne se s číslem stránky prát.
   u8g2.drawStr(0, HDR_BASE, left);
 
   // Číslo stránky zarovnané k pravému okraji.
@@ -126,6 +157,22 @@ static void drawHeader(const NetList& nets, uint8_t page, uint8_t pages, bool sc
 }
 
 static void drawRow(uint8_t base, const NetInfo& n) {
+  // Sítě, které se týkal náraz deauth rámců, se kreslí v negativu.
+  //
+  // Inverze stojí NULA PIXELŮ, což je na 128×64 rozhodující — na značku
+  // v řádku už místo není. Řádek zabírá base-7 (ascent) až base+2 (descent),
+  // tedy přesně ROW_PITCH pixelů.
+  //
+  // Co ta značka znamená: síť byla v deauth rámcích JMENOVÁNA, tedy je
+  // DOTČENÁ. Neznamená, že ty rámce poslala — MAC odesílatele se u deauth
+  // podvrhuje a nástroj nemá jak zjistit, kdo je odeslal doopravdy.
+  const bool flagged = (n.deauthFlags & DEAUTH_BURST) != 0;
+  if (flagged) {
+    u8g2.setDrawColor(1);
+    u8g2.drawBox(0, (uint8_t)(base - 7), SCR_W, ROW_PITCH);
+    u8g2.setDrawColor(0);   // text se od teď kreslí pozadím
+  }
+
   // Číselný blok: kanál na 2 znaky, RSSI na 4 znaky (kvůli "-100").
   // Vždycky 7 znaků = 42 px, takže čísla stojí ve sloupci pod sebou i když
   // jedno má -41 a druhé -100. Kdybys místo toho použil "%u %d", ušetří to
@@ -138,8 +185,10 @@ static void drawRow(uint8_t base, const NetInfo& n) {
   u8g2.drawStr(0, base, authText(n.auth));
 
   // Kolik pixelů na SSID vlastně zbylo. Počítá se, ne hádá — proto stačilo
-  // u dvouznakového sloupce zvednout AUTH_W a layout se přepočítal sám.
-  const int avail = (int)SCR_W - (int)AUTH_W - (int)GAP_W - rightW;
+  // u dvouznakového sloupce zvednout AUTH_W a přidat mezeru, a layout se
+  // přepočítal sám.
+  const int avail = (int)SCR_W - (int)AUTH_W - (int)GAP_AUTH_SSID_W
+                              - (int)GAP_SSID_NUM_W - rightW;
 
   char ssid[34];
   // Skryté SSID přijde ze skenu jako prázdný string. Že se z toho stane
@@ -150,7 +199,9 @@ static void drawRow(uint8_t base, const NetInfo& n) {
   ssid[sizeof(ssid) - 1] = '\0';
   fitToWidth(ssid, avail);
 
-  u8g2.drawStr(AUTH_W, base, ssid);
+  u8g2.drawStr(AUTH_W + GAP_AUTH_SSID_W, base, ssid);
+
+  if (flagged) u8g2.setDrawColor(1);   // vrátit kreslení do normálu
 }
 
 void oledBegin() {
@@ -162,11 +213,12 @@ void oledBegin() {
   u8g2.sendBuffer();
 }
 
-void oledDrawPage(const NetList& nets, uint8_t page, uint8_t pages, bool scanning) {
+void oledDrawPage(const NetList& nets, uint8_t page, uint8_t pages,
+                  const char* status) {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
 
-  drawHeader(nets, page, pages, scanning);
+  drawHeader(nets, page, pages, status);
 
   if (nets.count() == 0) {
     u8g2.drawStr(0, ROW0_BASE + ROW_PITCH, "zadne site");

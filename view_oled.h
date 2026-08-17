@@ -18,5 +18,9 @@ static const uint8_t ROWS_PER_PAGE = 5;
 void oledBegin();
 
 // page je od 0, pages je celkový počet stránek (nejmíň 1).
-// scanning rozsvítí v hlavičce hvězdičku, že sběr právě běží.
-void oledDrawPage(const NetList& nets, uint8_t page, uint8_t pages, bool scanning);
+//
+// status je krátký štítek, který vyrobil zdroj dat — "*" u běžícího skenu,
+// "P7" u promiskuitního režimu na kanálu 7, "" když není co hlásit. View
+// vůbec neřeší, co znamená; jen ho vytiskne. Kompromis, který za tím je, je
+// rozepsaný u NetSource::status() v netsource.h.
+void oledDrawPage(const NetList& nets, uint8_t page, uint8_t pages, const char* status);

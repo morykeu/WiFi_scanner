@@ -1,7 +1,13 @@
 #include <Arduino.h>
+#include "scansource.h"
+
+// Arduino IDE překládá VŠECHNY .cpp ve složce sketche bez ohledu na to, jaký
+// zdroj je zvolený v config.h. Bez tohohle obalu by se kód skenu překládal
+// do flash i v promiskuitním režimu, kde se nikdy nezavolá.
+#if NET_SOURCE == NET_SOURCE_SCAN
+
 #include <WiFi.h>
 #include <string.h>
-#include "scansource.h"
 
 // ─── Překlad zabezpečení z esp_wifi na náš AuthKind ──────────────────────────
 //
@@ -57,39 +63,10 @@ static AuthKind toAuthKind(wifi_auth_mode_t m) {
   }
 }
 
-// ─── Sanitizace SSID ─────────────────────────────────────────────────────────
-//
-// SSID je 32 libovolných bajtů z éteru. Vysílá ho cizí zařízení, které nemáme
-// pod kontrolou, a nikde není psáno, že to musí být text. Kdokoli si může
-// pojmenovat AP tak, aby v názvu byly ANSI escape sekvence — a ty by
-// v terminálu, kde čteš sériovku, umožnily přebarvovat výpis, mazat řádky
-// nebo posouvat kurzor. Ladicí výstup, kterému nelze věřit, je horší než
-// žádný. Na displeji by se bajty nad 0x7E stejně vykreslily jako prázdná
-// místa, protože font _tf pokrývá Latin-1 a víc ne.
-//
-// Proto se tady, na hranici, kde se data z rádia stávají modelem, nechá jen
-// tisknutelné ASCII (0x20–0x7E) a všechno ostatní se změní na tečku. Jednou,
-// ne v každém view — aby platilo jednoduché pravidlo, na které se dá spolehnout:
-// co je v NetList, je bezpečné vytisknout.
-//
-// Prázdné SSID (skrytá síť) zůstane prázdné. Že se z něj stane "<hidden>", je
-// rozhodnutí o zobrazení, ne o datech, a patří proto do view.
-//
-// Jedno omezení, které tímhle nespravíme: WiFi.SSID() nám podá String, tedy
-// C-string. Když má SSID uvnitř nulový bajt, je zbytek odříznutý už předtím,
-// než se k němu dostaneme. Řešit by to šlo jen obejitím Arduino WiFi vrstvy
-// a čtením wifi_ap_record_t přímo, což tady za to nestojí.
-static void copySanitizedSsid(char* dst, size_t dstSize, const char* src) {
-  size_t i = 0;
-  // Každý bajt se mapuje právě na jeden, nic se nezahazuje ani nevkládá,
-  // takže stačí jeden index pro zdroj i cíl.
-  while (src[i] != '\0' && i + 1 < dstSize) {
-    const unsigned char c = (unsigned char)src[i];
-    dst[i] = (c >= 0x20 && c <= 0x7E) ? (char)c : '.';
-    i++;
-  }
-  dst[i] = '\0';
-}
+// Sanitizace SSID se přesunula do netlist.cpp jako setSsidSanitized(),
+// protože ji potřebují oba zdroje. Bydlí u modelu schválně: díky ní platí
+// pravidlo, že co je v NetList, je bezpečné vytisknout — a to je vlastnost
+// modelu, ne jednoho zdroje.
 
 void ScanSource::begin() {
   // Režim stanice, ale nikam se nepřipojujeme — jen posloucháme a sondujeme.
@@ -155,11 +132,16 @@ bool ScanSource::poll() {
   if (r < 0) {           // WIFI_SCAN_FAILED nebo jiná chyba
     WiFi.scanDelete();
     nets_.clear();
+    nets_.setSeen(0, false);
     return true;         // "nula sítí" je taky platná informace, ať se to
                          // na displeji i sériovce projeví
   }
 
-  collect((uint16_t)r);
+  // Gettery WiFi.SSID(), RSSI(), channel() atd. berou index jako uint8_t,
+  // takže víc než 255 sítí bychom stejně nepřečetli. Když jich sken vrátil
+  // víc, je náš počet jen dolní odhad a musí to být vidět na displeji.
+  const bool capped = ((uint16_t)r > 255);
+  collect((uint16_t)r, capped);
 
   // Uvolní seznam, který si drží WiFi stack. Bez tohohle ta data zůstanou
   // ležet v jeho paměti až do dalšího skenu.
@@ -167,12 +149,13 @@ bool ScanSource::poll() {
   return true;
 }
 
-void ScanSource::collect(uint16_t found) {
+void ScanSource::collect(uint16_t found, bool capped) {
   nets_.clear();
 
-  // Gettery WiFi.SSID(), RSSI(), channel() atd. berou index jako uint8_t,
-  // takže víc než 255 sítí bychom stejně nepřečetli. Bez tohohle stropu by
-  // uint8_t čítač na 255 přetekl na nulu a cyklus by běžel navěky.
+  const uint32_t now = millis();
+
+  // Bez tohohle stropu by uint8_t čítač na 255 přetekl na nulu a cyklus by
+  // běžel navěky.
   if (found > 255) found = 255;
 
   for (uint8_t i = 0; i < (uint8_t)found; i++) {
@@ -181,8 +164,12 @@ void ScanSource::collect(uint16_t found) {
     // WiFi.SSID(i) vrací String, tedy haldu. Okamžitě to přefiltrujeme do
     // pevného pole a String zahodíme — nic z haldy nám nepřežije tenhle
     // řádek. (Proto je v NetInfo char[33] a ne String.)
+    //
+    // Omezení téhle cesty: String je C-string, takže SSID s nulovým bajtem
+    // uvnitř je odříznuté ještě dřív, než se k němu dostaneme. Promiskuitní
+    // režim tenhle problém nemá, ten čte SSID prvek i s jeho délkou.
     const String ssid = WiFi.SSID(i);
-    copySanitizedSsid(n.ssid, sizeof(n.ssid), ssid.c_str());
+    setSsidSanitized(n, (const uint8_t*)ssid.c_str(), (uint8_t)ssid.length());
 
     // RSSI přijde jako int32_t. constrain() je pojistka proti tomu, aby se
     // nesmyslná hodnota po přetypování na int8_t nepřeklopila na kladnou.
@@ -201,6 +188,16 @@ void ScanSource::collect(uint16_t found) {
     if (bssid) memcpy(n.bssid, bssid, sizeof(n.bssid));
     else       memset(n.bssid, 0, sizeof(n.bssid));
 
+    // Sken vidí všechny sítě naráz, takže je všechny "slyšel" právě teď.
+    // Stárnutí tady nic nedělá, ale pole musí být platné v obou režimech.
+    n.lastSeenMs = now;
+
     nets_.add(n);   // vloží se rovnou na správné místo podle RSSI
   }
+
+  // Sken ví přesně, kolik sítí našel — na rozdíl od promiskuitního režimu
+  // to nemusí odhadovat z rosteru.
+  nets_.setSeen(found, capped);
 }
+
+#endif  // NET_SOURCE == NET_SOURCE_SCAN

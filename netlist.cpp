@@ -1,13 +1,33 @@
 #include <Arduino.h>
+#include <string.h>
 #include "netlist.h"
 
 // Pozor: v .cpp souborech Arduino IDE nedělá tu magii, co dělá v .ino —
 // negeneruje prototypy funkcí a neincluduje Arduino.h automaticky. Proto je
 // ten #include výš potřeba napsat ručně.
 
+void setSsidSanitized(NetInfo& n, const uint8_t* src, uint8_t len) {
+  const size_t cap = sizeof(n.ssid) - 1;   // 32 znaků + místo na terminátor
+  size_t o = 0;
+
+  // Každý bajt se mapuje právě na jeden — nic se nezahazuje ani nevkládá.
+  while (o < len && o < cap) {
+    const uint8_t c = src[o];
+    n.ssid[o] = (c >= 0x20 && c <= 0x7E) ? (char)c : '.';
+    o++;
+  }
+  n.ssid[o] = '\0';
+}
+
 void NetList::clear() {
-  count_ = 0;
-  seen_  = 0;
+  count_          = 0;
+  seen_           = 0;
+  seenLowerBound_ = false;
+}
+
+void NetList::setSeen(uint16_t seen, bool lowerBound) {
+  seen_           = seen;
+  seenLowerBound_ = lowerBound;
 }
 
 const NetInfo& NetList::at(uint8_t i) const {
@@ -15,15 +35,13 @@ const NetInfo& NetList::at(uint8_t i) const {
   return items_[i];
 }
 
-bool NetList::add(const NetInfo& n) {
-  // Počítá se KAŽDÁ nabídnutá síť, i ta, která se za chvíli zahodí. Právě
-  // rozdíl mezi seen_ a count_ je ta informace, kvůli které to tady je —
-  // aby šlo poznat, že hlavička ukazuje jen výřez.
-  //
-  // Strop je proti přetečení: v promiskuitním režimu se do stejného seznamu
-  // bude přidávat dlouhodobě, ne jen 255 sítí z jednoho skenu.
-  if (seen_ < 0xFFFF) seen_++;
+void NetList::removeAt(uint8_t i) {
+  if (i >= count_) return;
+  for (uint8_t k = i; k + 1 < count_; k++) items_[k] = items_[k + 1];
+  count_--;
+}
 
+bool NetList::add(const NetInfo& n) {
   // Najdi první uloženou síť, která je slabší než ta nová — tam nová patří.
   // Podmínka je >=, ne >, takže sítě se stejným RSSI si drží pořadí, v jakém
   // přišly (stabilní řazení) a nepřeskakují si každý sken.
@@ -43,4 +61,54 @@ bool NetList::add(const NetInfo& n) {
   items_[pos] = n;
   if (count_ < MAX_NETS) count_++;
   return true;
+}
+
+bool NetList::upsertByBssid(const NetInfo& n) {
+  for (uint8_t i = 0; i < count_; i++) {
+    if (memcmp(items_[i].bssid, n.bssid, sizeof(n.bssid)) == 0) {
+      // Známá síť. Odebrat a vložit znovu — RSSI se mezi beacony mění, takže
+      // se mění i místo v seřazeném seznamu. Po removeAt() je vždycky volno,
+      // takže tenhle add() nemůže selhat.
+      //
+      // deauthFlags se přenese ze starého záznamu, protože v příchozím
+      // beaconu je nula. Bez tohohle řádku by příznak nárazu zhasl při
+      // každém dalším beaconu té sítě.
+      NetInfo merged = n;
+      merged.deauthFlags = items_[i].deauthFlags;
+      removeAt(i);
+      return add(merged);
+    }
+  }
+  return add(n);   // nová síť; může se nevejít, a to je v pořádku
+}
+
+void NetList::clearDeauthFlags() {
+  for (uint8_t i = 0; i < count_; i++) items_[i].deauthFlags = 0;
+}
+
+bool NetList::setDeauthFlag(const uint8_t* bssid) {
+  for (uint8_t i = 0; i < count_; i++) {
+    if (memcmp(items_[i].bssid, bssid, sizeof(items_[i].bssid)) == 0) {
+      items_[i].deauthFlags |= DEAUTH_BURST;
+      return true;
+    }
+  }
+  return false;
+}
+
+uint8_t NetList::expireOlderThan(uint32_t nowMs, uint32_t maxAgeMs) {
+  uint8_t removed = 0;
+  uint8_t i = 0;
+
+  while (i < count_) {
+    // Rozdíl unsigned čísel, takže přetečení millis() po 49 dnech tohle
+    // přežije. Kdyby se psalo lastSeenMs + maxAge < now, rozbilo by se to.
+    if (nowMs - items_[i].lastSeenMs >= maxAgeMs) {
+      removeAt(i);      // i se nezvyšuje, na jeho místo se posunul další
+      removed++;
+    } else {
+      i++;
+    }
+  }
+  return removed;
 }
