@@ -1,0 +1,4 @@
+# Store text files with LF in the repository, check them out with whatever the
+# local platform uses. Without this, committing from Windows records CRLF and
+# anyone cloning on Linux or macOS sees the whole file as changed.
+* text=auto

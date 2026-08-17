@@ -1,0 +1,28 @@
+# ── Arduino IDE build output ──────────────────────────────────────────────
+# "Export compiled binary" drops these into the sketch folder.
+build/
+*.hex
+*.bin
+*.elf
+*.map
+*.eep
+*.lst
+
+# Object files and dependency files, in case a build runs in-tree.
+*.o
+*.a
+*.d
+*.su
+
+# ── Arduino IDE per-machine state ─────────────────────────────────────────
+# sketch.json stores the selected board and the serial port. The port is
+# specific to one machine, so committing it just creates noise in diffs.
+sketch.json
+.theia/
+.vscode/
+
+# ── OS cruft ──────────────────────────────────────────────────────────────
+Thumbs.db
+desktop.ini
+Desktop.ini
+.DS_Store
