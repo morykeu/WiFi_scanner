@@ -12,10 +12,11 @@ out over the serial port in a wider format for debugging.
 **This tool only ever listens.** It never transmits a frame in promiscuous
 mode — no deauth, no probe requests, no injection, not even commented out.
 
-![The scanner running: five networks on one page, sorted strongest-first](docs/display.jpg)
+![The scanner running in promiscuous mode, networks sorted strongest-first](docs/display.jpg)
 
-*Network names are redacted. The fourth row reads `12` — a WPA/WPA2 mixed-mode
-network that earlier versions of this code would have reported as `2`. See
+*Network names are redacted. Promiscuous mode listening on channel 2 (`P2`), nine
+networks across two pages. The second row reads `12` — a WPA/WPA2 mixed-mode
+network, which earlier versions of this code would have reported as `2`. See
 [Reporting the weakest accepted method](#reporting-the-weakest-accepted-method).*
 
 <!-- Second photo slot: wiring. Drop the image in docs/ and uncomment:
@@ -401,6 +402,20 @@ with none to spare:
 
 - the header status changes from `P6` to `!6`, visible on every page;
 - the affected network's row is drawn inverted, when that page is showing.
+
+![The header reading exclamation-9 with the affected network's row inverted](docs/deauth.jpg)
+
+*Network names are redacted. Both markers at once: the header reads `!9` —
+promiscuous mode, currently listening on channel 9, with a deauth burst on
+record — and the row of the network named in the frames is drawn inverted. Note
+that the `9` is the channel being listened to at that moment, not the channel of
+the flagged network.*
+
+***This is a deliberate test, not a real event.*** `DEAUTH_BURST_MIN` was
+temporarily lowered from 5 to 1 and the author disconnected his own phone from
+his own network. The single disassociation frame a client sends when it leaves
+was then enough to cross the threshold. Nothing was transmitted by the tool, and
+nothing here was observed happening to anyone.
 
 The vocabulary throughout is deliberate. The tool observes a burst of deauth
 frames, which is a phenomenon and not a verdict — so the wording everywhere

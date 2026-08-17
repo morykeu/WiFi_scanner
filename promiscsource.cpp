@@ -53,7 +53,8 @@ static volatile uint32_t s_disassocTotal  = 0;
 static volatile uint32_t s_broadcastTotal = 0;
 static volatile uint32_t s_recycled       = 0;   // kolikrát se slot přepsal
 
-// Zámek chrání JEN pole bssid[] ve slotech, nic jiného.
+// Zámek chrání identitu slotu a nulování jeho počítadel při recyklaci — tedy
+// vše, co se u slotu mění naráz a musí k sobě patřit.
 //
 // Šest bajtů MAC adresy se atomicky zapsat nedá, a kdyby loop() přečetlo
 // adresu uprostřed přepisu, přiřadilo by počty špatné síti — a to už není
@@ -356,16 +357,45 @@ bool PromiscSource::poll() {
 }
 
 void PromiscSource::evaluateDeauth(uint32_t now) {
-  // Identity si okopírujeme pod zámkem, počítadla mimo něj — ta jsou
-  // 32bitová a atomická, takže se přečtou celá. Kritická sekce je tak jen
-  // 12 × 6 bajtů a žádné volání uvnitř.
-  uint8_t bssids[DEAUTH_SLOTS][6];
+  // KONZISTENTNÍ SNÍMEK CELÉHO SLOTU POD ZÁMKEM.
+  //
+  // Dřív se pod zámkem braly jen adresy a počítadla se četla až mimo něj.
+  // To mělo závodní podmínku: kdyby callback mezi čtením generace a čtením
+  // počítadel slot recykloval, prošla by kontrola generace ještě se starou
+  // hodnotou, ale počítadla by se přečetla už vynulovaná. Rozdíl 0 - prev_
+  // by podtekl na obrovské číslo a vyhodnotil se jako gigantický náraz.
+  //
+  // Recyklace nuluje počítadla uvnitř kritické sekce (viz countDeauth), takže
+  // když se generace i počty přečtou taky pod zámkem, patří k sobě. Prosté
+  // inkrementy z horké cesty zámek neberou, ale ty jsou monotónní — můžou
+  // hodnotu jen zvýšit, nikdy nerozhodit dvojici generace/počet.
+  //
+  // Cena je 12 × 32 bajtů kopírování navíc: samá přiřazení a memcpy šesti
+  // bajtů, žádný cyklus s voláním uvnitř.
+  struct Snap {
+    uint8_t  bssid[6];
+    uint32_t generation;
+    uint32_t deauth;
+    uint32_t disassoc;
+    uint32_t broadcast;
+    uint16_t lastReason;
+    uint8_t  channel;
+    bool     signedAsAp;
+  };
+  Snap    snap[DEAUTH_SLOTS];
   uint8_t used;
 
   portENTER_CRITICAL(&s_slotMux);
   used = s_slotsUsed;
   for (uint8_t i = 0; i < used; i++) {
-    memcpy(bssids[i], s_slots[i].bssid, sizeof(bssids[i]));
+    memcpy(snap[i].bssid, s_slots[i].bssid, sizeof(snap[i].bssid));
+    snap[i].generation = s_slots[i].generation;
+    snap[i].deauth     = s_slots[i].deauth;
+    snap[i].disassoc   = s_slots[i].disassoc;
+    snap[i].broadcast  = s_slots[i].broadcast;
+    snap[i].lastReason = s_slots[i].lastReason;
+    snap[i].channel    = s_slots[i].channel;
+    snap[i].signedAsAp = s_slots[i].signedAsAp;
   }
   portEXIT_CRITICAL(&s_slotMux);
 
@@ -374,43 +404,51 @@ void PromiscSource::evaluateDeauth(uint32_t now) {
   nets_.clearDeauthFlags();
   burstOnRecord_ = false;
   newBurst_      = -1;
+  burstCount_    = 0;
 
   for (uint8_t i = 0; i < used; i++) {
-    const uint32_t gen = s_slots[i].generation;
-    const uint32_t de  = s_slots[i].deauth;
-    const uint32_t di  = s_slots[i].disassoc;
-    const uint32_t bc  = s_slots[i].broadcast;
+    // Pojistka nad rámec snímku: monotónní počítadlo klesnout nemůže, takže
+    // nižší hodnota než minule je jednoznačná známka, že se slot pod rukama
+    // přepsal. Rozdíl se pak nebere, aby z podtečení nevyšel falešný náraz.
+    const bool wentBackwards = (snap[i].deauth    < prev_[i].deauth)
+                            || (snap[i].disassoc  < prev_[i].disassoc)
+                            || (snap[i].broadcast < prev_[i].broadcast);
 
-    if (gen != prev_[i].generation) {
+    if (snap[i].generation != prev_[i].generation || wentBackwards) {
       // Slot mezitím dostal jiné BSSID. Předchozí hodnoty patřily někomu
       // jinému, takže se zahodí — jinak by z nich vyšel nesmyslný rozdíl.
-      prev_[i].generation = gen;
-      prev_[i].deauth     = 0;
-      prev_[i].disassoc   = 0;
-      prev_[i].broadcast  = 0;
+      prev_[i].generation = snap[i].generation;
+      prev_[i].deauth     = snap[i].deauth;
+      prev_[i].disassoc   = snap[i].disassoc;
+      prev_[i].broadcast  = snap[i].broadcast;
       prev_[i].burstAtMs  = 0;
+      continue;   // v téhle otočce se z tohohle slotu nic nevyhodnocuje
     }
 
-    const uint32_t dDeauth = de - prev_[i].deauth;
-    const uint32_t dDisas  = di - prev_[i].disassoc;
-    const uint32_t dBcast  = bc - prev_[i].broadcast;
+    const uint32_t dDeauth = snap[i].deauth    - prev_[i].deauth;
+    const uint32_t dDisas  = snap[i].disassoc  - prev_[i].disassoc;
+    const uint32_t dBcast  = snap[i].broadcast - prev_[i].broadcast;
 
-    prev_[i].deauth    = de;
-    prev_[i].disassoc  = di;
-    prev_[i].broadcast = bc;
+    prev_[i].deauth    = snap[i].deauth;
+    prev_[i].disassoc  = snap[i].disassoc;
+    prev_[i].broadcast = snap[i].broadcast;
 
     // Práh se vztahuje k jedné otočce, tedy k jednomu 250ms oknu na tom
     // kanálu. Odvození obou čísel je v config.h.
     if ((dDeauth + dDisas) >= DEAUTH_BURST_MIN || dBcast >= DEAUTH_BCAST_MIN) {
       prev_[i].burstAtMs = (now != 0) ? now : 1;   // 0 znamená "nic"
+      burstCount_++;
 
+      // Podrobnosti se nesou jen o jednom nárazu. Kolik jich v téhle otočce
+      // bylo celkem, hlásí burstCount_ — displej označí všechny dotčené sítě,
+      // takže výpis nesmí tvrdit, že byla jen jedna.
       newBurst_        = (int8_t)i;
       burstFrames_     = dDeauth + dDisas;
       burstBcast_      = dBcast;
-      burstReason_     = s_slots[i].lastReason;
-      burstChannel_    = s_slots[i].channel;
-      burstSignedAsAp_ = s_slots[i].signedAsAp;
-      memcpy(burstBssid_, bssids[i], sizeof(burstBssid_));
+      burstReason_     = snap[i].lastReason;
+      burstChannel_    = snap[i].channel;
+      burstSignedAsAp_ = snap[i].signedAsAp;
+      memcpy(burstBssid_, snap[i].bssid, sizeof(burstBssid_));
     }
 
     if (prev_[i].burstAtMs != 0 && (now - prev_[i].burstAtMs) < DEAUTH_HOLD_MS) {
@@ -418,7 +456,7 @@ void PromiscSource::evaluateDeauth(uint32_t now) {
       // Vrátí false, když už síť vypadla stárnutím ze seznamu. To je v pořádku
       // a je to vědomé: posouvat kvůli deauth rámci lastSeenMs by znamenalo
       // tvrdit, že jsme slyšeli beacon, který jsme neslyšeli.
-      nets_.setDeauthFlag(bssids[i]);
+      nets_.setDeauthFlag(snap[i].bssid);
     } else {
       prev_[i].burstAtMs = 0;
     }
@@ -509,6 +547,15 @@ void PromiscSource::updateDiagnostics() {
       "      Neextrapolujeme - kolikrat vic proletelo, nevime.\n"
       "      MAC se u deauth podvrhuje. Vime, JAKYM JMENEM je ramec podepsan,\n"
       "      ne kdo ho poslal. Znacka u site znamena DOTCENA, ne odpovedna."));
+
+    // V jedné otočce může mít náraz víc sítí. Displej označí všechny, takže
+    // výpis nesmí mlčet o tom, že podrobnosti výš patří jen jedné z nich.
+    if (burstCount_ > 1) {
+      put(snprintf(diag_ + n, sizeof(diag_) - n,
+        "\n      naraz melo v teto otocce jeste dalsich %u siti - podrobnosti"
+        " vyse patri jen jedne z nich, oznaceny jsou vsechny",
+        (unsigned)(burstCount_ - 1)));
+    }
   }
 
   if (dropsDelta > 0) {

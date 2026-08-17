@@ -104,6 +104,7 @@ private:
   uint8_t  burstChannel_   = 0;
   bool     burstSignedAsAp_ = false;
   bool     burstOnRecord_  = false;
+  uint8_t  burstCount_     = 0;   // kolik siti melo naraz v teto otocce
 
   // Buffery jsou členské proměnné schválně: ukazatel, který status()
   // a diagnostics() vracejí, musí přežít návrat z volání. Lokální buffer
