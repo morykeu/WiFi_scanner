@@ -9,9 +9,11 @@ count and the current page. The same data goes out over the serial port in a
 wider format for debugging. The scan runs asynchronously, so paging keeps
 moving while the radio is busy.
 
-<!-- Photo slot: drop an image in docs/ and uncomment the line below.
-     ![The assembled scanner](docs/device.jpg)
--->
+![The scanner running: five networks on one page, sorted strongest-first](docs/display.jpg)
+
+*Network names are redacted. The fourth row reads `12` — a WPA/WPA2 mixed-mode
+network that earlier versions of this code would have reported as `2`. See
+[Reporting the weakest accepted method](#reporting-the-weakest-accepted-method).*
 
 What the display looks like, with the layout constants that produce it:
 
